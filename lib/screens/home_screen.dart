@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../models/language.dart';
 import '../services/speech_service.dart';
 import '../services/translation_service.dart';
@@ -21,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isListening = false;
   bool _isDarkMode = true;
   bool _isVoiceMode = true;
+  bool _permissionGranted = false;
 
   AppLanguage _fromLang = languages.firstWhere((l) => l.code == 'en');
   AppLanguage _toLang = languages.firstWhere((l) => l.code == 'ar');
@@ -28,10 +30,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _requestPermission();
     final tts = Provider.of<TtsService>(context, listen: false);
     final speech = Provider.of<SpeechService>(context, listen: false);
     tts.initialize();
     speech.initialize();
+  }
+
+  Future<void> _requestPermission() async {
+    final status = await Permission.microphone.request();
+    setState(() => _permissionGranted = status.isGranted);
   }
 
   @override
@@ -54,16 +62,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _onMicTap() async {
+    if (!_permissionGranted) {
+      await _requestPermission();
+      return;
+    }
     final speech = Provider.of<SpeechService>(context, listen: false);
-
     if (_isListening) {
       setState(() => _isListening = false);
       speech.stopListening();
-      await Future.delayed(const Duration(milliseconds: 200));
+      await Future.delayed(const Duration(milliseconds: 300));
       final text = speech.currentText;
-      if (text.trim().isNotEmpty) {
-        await _translateAndAdd(text);
-      }
+      if (text.trim().isNotEmpty) await _translateAndAdd(text);
     } else {
       setState(() => _isListening = true);
       speech.startListening('A');
@@ -80,10 +89,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _translateAndAdd(String text) async {
     final translation = Provider.of<TranslationService>(context, listen: false);
     final tts = Provider.of<TtsService>(context, listen: false);
-
     final translated =
         await translation.translate(text, _fromLang.code, _toLang.code);
-
+    if (!mounted) return;
     setState(() {
       _messages.add(ChatMessage(
         originalText: text,
@@ -95,9 +103,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ));
     });
     _scrollToBottom();
-
     for (int i = 0; i < 3; i++) {
-      await Future.delayed(const Duration(milliseconds: 600));
+      await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
       await tts.speak(translated, _toLang.ttsCode);
       while (tts.isSpeaking) {
@@ -135,40 +142,31 @@ class _HomeScreenState extends State<HomeScreen> {
   Color get _accent => const Color(0xFF1ABC9C);
   Color get _bg => _isDarkMode ? const Color(0xFF121212) : Colors.grey.shade50;
   Color get _card => _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
-  Color get _cardAlt =>
-      _isDarkMode ? const Color(0xFF2D2D2D) : Colors.grey.shade100;
-  Color get _textPrimary => _isDarkMode ? Colors.white : Colors.black87;
-  Color get _textSecondary =>
-      _isDarkMode ? Colors.white54 : Colors.grey.shade500;
-  Color get _border =>
-      _isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300;
+  Color get _card2 =>
+      _isDarkMode ? const Color(0xFF2A2A2A) : Colors.grey.shade100;
+  Color get _txt1 => _isDarkMode ? Colors.white : Colors.black87;
+  Color get _txt2 => _isDarkMode ? Colors.white60 : Colors.grey.shade600;
+  Color get _brd => _isDarkMode ? Colors.grey.shade800 : Colors.grey.shade300;
 
   @override
   Widget build(BuildContext context) {
     final speech = context.watch<SpeechService>();
     final translation = context.watch<TranslationService>();
-    bool isListening = _isListening;
-
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(translation),
-            _buildLanguageSelector(),
+            _header(translation),
+            _langSelector(),
             if (_messages.isEmpty && !_isListening && !_isVoiceMode)
-              Expanded(child: _buildTextInputArea())
+              Expanded(child: _textOnlyMode())
+            else if (_messages.isEmpty && !_isListening)
+              Expanded(child: _bigMicArea())
             else ...[
-              if (_messages.isEmpty && !_isListening)
-                _buildMicButtonArea()
-              else
-                _buildCompactMic(),
-              if (_isListening && speech.currentText.isNotEmpty)
-                _buildLivePreview(),
-              Expanded(child: _buildMessagesList()),
-              if (_isVoiceMode && _messages.isNotEmpty) _buildBottomMicBar(),
-              if (!_isVoiceMode && _messages.isNotEmpty)
-                _buildBottomTextInput(),
+              _smallMicRow(speech),
+              Expanded(child: _messageList()),
+              _bottomBar(),
             ],
           ],
         ),
@@ -176,128 +174,190 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildHeader(TranslationService translation) {
+  Widget _header(TranslationService t) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(color: _accent, shape: BoxShape.circle),
+            width: 34,
+            height: 34,
+            decoration: const BoxDecoration(
+                color: Color(0xFF1ABC9C), shape: BoxShape.circle),
             child: const Center(
                 child: Text('ک',
                     style: TextStyle(
                         color: Colors.white,
-                        fontSize: 18,
+                        fontSize: 15,
                         fontWeight: FontWeight.bold))),
           ),
           const SizedBox(width: 8),
-          Expanded(
+          const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                RichText(
-                  text: TextSpan(
-                    children: [
-                      TextSpan(
-                          text: 'Kalam ',
-                          style: TextStyle(
-                              color: _textPrimary,
-                              fontSize: 17,
-                              fontWeight: FontWeight.bold)),
-                      TextSpan(
-                          text: 'كلام',
-                          style:
-                              TextStyle(color: _textSecondary, fontSize: 14)),
-                    ],
-                  ),
-                ),
-                Text('Voice Translator',
-                    style: TextStyle(color: _textSecondary, fontSize: 11)),
+                Text('Kalam كلام',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                Text('Voice Translator', style: TextStyle(fontSize: 10)),
               ],
             ),
           ),
-          _buildModeToggle(),
-          const SizedBox(width: 10),
-          GestureDetector(
-            onTap: _showSettings,
-            child:
-                Icon(Icons.settings_outlined, color: _textSecondary, size: 22),
-          ),
-          const SizedBox(width: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: _isDarkMode
-                  ? Colors.green.withOpacity(0.15)
-                  : Colors.green.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.green.withOpacity(0.3)),
-            ),
+                color: Colors.green.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10)),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                    width: 7,
-                    height: 7,
+                    width: 6,
+                    height: 6,
                     decoration: const BoxDecoration(
                         color: Colors.green, shape: BoxShape.circle)),
-                const SizedBox(width: 4),
+                const SizedBox(width: 3),
                 Text(
-                    translation.isTranslating
+                    t.isTranslating
                         ? 'Translating...'
                         : _isListening
                             ? 'Listening...'
                             : 'Ready',
                     style: const TextStyle(
                         color: Colors.green,
-                        fontSize: 11,
+                        fontSize: 10,
                         fontWeight: FontWeight.w600)),
               ],
             ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _showSettings,
+            child: const Icon(Icons.settings_outlined,
+                color: Colors.white54, size: 20),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildModeToggle() {
-    return Container(
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _border)),
+  Widget _langSelector() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          _modeButton(Icons.mic, 'Voice', true),
-          _modeButton(Icons.text_fields, 'Text', false),
+          Expanded(
+              child:
+                  _langCard(_fromLang, (l) => setState(() => _fromLang = l))),
+          GestureDetector(
+            onTap: _swapLanguages,
+            child: Container(
+              width: 30,
+              height: 30,
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: const BoxDecoration(
+                  color: Color(0xFF1ABC9C), shape: BoxShape.circle),
+              child: const Center(
+                  child: Icon(Icons.swap_horiz, color: Colors.white, size: 14)),
+            ),
+          ),
+          Expanded(
+              child: _langCard(_toLang, (l) => setState(() => _toLang = l))),
         ],
       ),
     );
   }
 
-  Widget _modeButton(IconData icon, String label, bool isVoice) {
+  Widget _langCard(AppLanguage lang, Function(AppLanguage) onSel) {
+    return GestureDetector(
+      onTap: () => LanguageBottomSheet.show(context, lang, onSel),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+            color: _card,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _brd)),
+        child: Row(
+          children: [
+            Text(lang.flag, style: const TextStyle(fontSize: 16)),
+            const SizedBox(width: 4),
+            Expanded(
+                child: Text(lang.nativeName,
+                    style: TextStyle(
+                        color: _txt1,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis)),
+            Icon(Icons.keyboard_arrow_down, color: _txt2, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _bigMicArea() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _modeBtn(Icons.mic, 'Voice', true),
+              const SizedBox(width: 8),
+              _modeBtn(Icons.text_fields, 'Text', false),
+            ],
+          ),
+        ),
+        const SizedBox(height: 30),
+        GestureDetector(
+          onTap: _onMicTap,
+          child: Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              color: _isListening ? Colors.redAccent : _accent,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                    color: (_isListening ? Colors.redAccent : _accent)
+                        .withOpacity(0.3),
+                    blurRadius: 20,
+                    spreadRadius: 3)
+              ],
+            ),
+            child: Icon(_isListening ? Icons.stop : Icons.mic,
+                color: Colors.white, size: 36),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(_isListening ? 'Listening...' : 'Tap the mic to start speaking',
+            style: TextStyle(color: _txt2, fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _modeBtn(IconData icon, String label, bool isVoice) {
     final active = isVoice ? _isVoiceMode : !_isVoiceMode;
     return GestureDetector(
       onTap: () => setState(() => _isVoiceMode = isVoice),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: active ? _accent : Colors.transparent,
+          color: active ? _accent : _card,
           borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: active ? _accent : _brd),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: active ? Colors.white : Colors.grey),
+            Icon(icon, size: 13, color: active ? Colors.white : _txt2),
             const SizedBox(width: 4),
             Text(label,
                 style: TextStyle(
-                    color: active ? Colors.white : Colors.grey,
-                    fontSize: 12,
+                    color: active ? Colors.white : _txt2,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600)),
           ],
         ),
@@ -305,109 +365,32 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildLanguageSelector() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+  Widget _smallMicRow(SpeechService speech) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       child: Row(
         children: [
-          _langButton(_fromLang, (lang) => setState(() => _fromLang = lang)),
-          GestureDetector(
-            onTap: _swapLanguages,
-            child: Container(
-              width: 38,
-              height: 38,
-              margin: const EdgeInsets.symmetric(horizontal: 6),
-              decoration: BoxDecoration(color: _accent, shape: BoxShape.circle),
-              child: const Center(
-                  child: Icon(Icons.swap_horiz, color: Colors.white, size: 18)),
-            ),
-          ),
-          _langButton(_toLang, (lang) => setState(() => _toLang = lang)),
-        ],
-      ),
-    );
-  }
-
-  Widget _langButton(AppLanguage lang, Function(AppLanguage) onSelect) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => LanguageBottomSheet.show(context, lang, onSelect),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-              color: _card,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _border)),
-          child: Row(
-            children: [
-              Text(lang.flag, style: const TextStyle(fontSize: 20)),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(lang.nativeName,
+          if (_isListening && speech.currentText.isNotEmpty)
+            Expanded(
+                child: Text(speech.currentText,
                     style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              Icon(Icons.keyboard_arrow_down, color: _textSecondary, size: 20),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMicButtonArea() {
-    return Expanded(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          GestureDetector(
-            onTap: _onMicTap,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                color: _isListening ? Colors.redAccent : _accent,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: (_isListening ? Colors.redAccent : _accent)
-                        .withOpacity(0.3),
-                    blurRadius: _isListening ? 25 : 15,
-                    spreadRadius: _isListening ? 4 : 2,
-                  ),
-                ],
-              ),
-              child: Icon(_isListening ? Icons.stop : Icons.mic,
-                  color: Colors.white, size: 42),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Text(_isListening ? 'Listening...' : 'Tap the mic to start speaking',
-              style: TextStyle(color: _textSecondary, fontSize: 13)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCompactMic() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: Row(
-        children: [
-          Expanded(child: Container()),
-          Text(_isListening ? 'Listening...' : '',
-              style: TextStyle(color: _textSecondary, fontSize: 12)),
+                        color: _txt1,
+                        fontSize: 13,
+                        fontStyle: FontStyle.italic)))
+          else
+            const Spacer(),
+          if (_isListening)
+            const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Color(0xFF1ABC9C))),
           const SizedBox(width: 8),
           GestureDetector(
             onTap: _onMicTap,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: _isListening ? 56 : 48,
-              height: _isListening ? 56 : 48,
+            child: Container(
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 color: _isListening ? Colors.redAccent : _accent,
                 shape: BoxShape.circle,
@@ -419,7 +402,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               child: Icon(_isListening ? Icons.stop : Icons.mic,
-                  color: Colors.white, size: _isListening ? 26 : 22),
+                  color: Colors.white, size: 20),
             ),
           ),
         ],
@@ -427,242 +410,84 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildBottomMicBar() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: _card, boxShadow: [
-        BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)
-      ]),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text('${_messages.length} translations',
-                style: TextStyle(color: _textSecondary, fontSize: 12)),
-          ),
-          GestureDetector(
-            onTap: _onMicTap,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: _isListening ? 56 : 48,
-              height: _isListening ? 56 : 48,
-              decoration: BoxDecoration(
-                color: _isListening ? Colors.redAccent : _accent,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                      color: (_isListening ? Colors.redAccent : _accent)
-                          .withOpacity(0.3),
-                      blurRadius: 10)
-                ],
-              ),
-              child: Icon(_isListening ? Icons.stop : Icons.mic,
-                  color: Colors.white, size: _isListening ? 26 : 22),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBottomTextInput() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: _card, boxShadow: [
-        BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)
-      ]),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                  color: _isDarkMode ? _cardAlt : Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: _border)),
-              child: TextField(
-                controller: _textController,
-                style: TextStyle(color: _textPrimary, fontSize: 14),
-                decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: 'Type to translate...',
-                    hintStyle: TextStyle(color: _textSecondary)),
-                onSubmitted: (_) => _translateText(),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          GestureDetector(
-            onTap: _translateText,
-            child: Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(color: _accent, shape: BoxShape.circle),
-              child: const Center(
-                  child: Icon(Icons.send, color: Colors.white, size: 20)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTextInputArea() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.text_fields,
-                size: 50, color: _textSecondary.withOpacity(0.5)),
-            const SizedBox(height: 12),
-            Text('Type text to translate',
-                style: TextStyle(color: _textSecondary, fontSize: 15)),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                  color: _card,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: _border)),
-              child: TextField(
-                controller: _textController,
-                style: TextStyle(color: _textPrimary, fontSize: 16),
-                decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: 'Enter text here...',
-                    hintStyle: TextStyle(color: _textSecondary)),
-                onSubmitted: (_) => _translateText(),
-              ),
-            ),
-            const SizedBox(height: 14),
-            GestureDetector(
-              onTap: _translateText,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                decoration: BoxDecoration(
-                    color: _accent, borderRadius: BorderRadius.circular(24)),
-                child: const Text('Translate',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLivePreview() {
-    final speech = Provider.of<SpeechService>(context);
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _accent.withOpacity(0.5))),
-      child: Row(
-        children: [
-          SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
-          const SizedBox(width: 10),
-          Expanded(
-              child: Text(speech.currentText,
-                  style: TextStyle(
-                      color: _textPrimary,
-                      fontSize: 14,
-                      fontStyle: FontStyle.italic))),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMessagesList() {
+  Widget _messageList() {
     if (_messages.isEmpty) return const SizedBox.shrink();
     return ListView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       itemCount: _messages.length,
-      itemBuilder: (context, index) =>
-          _buildTranslationCard(_messages[index], index),
+      itemBuilder: (context, i) => _msgCard(_messages[i], i),
     );
   }
 
-  Widget _buildTranslationCard(ChatMessage msg, int index) {
+  Widget _msgCard(ChatMessage msg, int i) {
     final time =
         '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}';
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _brd),
+      ),
       child: Column(
         children: [
+          // Source text
           Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-                color: _card,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(12)),
-                border: Border.all(color: _border)),
+            padding: const EdgeInsets.all(10),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(_fromLang.flag, style: const TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          Text(_fromLang.flag,
-                              style: const TextStyle(fontSize: 14)),
-                          const SizedBox(width: 4),
                           Text(msg.originalLang,
                               style: TextStyle(
                                   color: _accent,
-                                  fontSize: 12,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.w600)),
                           const Spacer(),
                           Text(time,
-                              style: TextStyle(
-                                  color: _textSecondary.withOpacity(0.6),
-                                  fontSize: 11)),
+                              style: TextStyle(color: _txt2, fontSize: 10)),
                         ],
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 3),
                       Text(msg.originalText,
-                          style: TextStyle(color: _textPrimary, fontSize: 15)),
+                          style: TextStyle(color: _txt1, fontSize: 14)),
                     ],
                   ),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
                 GestureDetector(
-                    onTap: () => _deleteMessage(index),
-                    child: Icon(Icons.delete_outline,
-                        color: _textSecondary.withOpacity(0.5), size: 18)),
+                    onTap: () => _deleteMessage(i),
+                    child: Icon(Icons.delete_outline, color: _txt2, size: 16)),
               ],
             ),
           ),
+          // Translated text
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-                color: _cardAlt,
+                color: _card2,
                 borderRadius:
-                    const BorderRadius.vertical(bottom: Radius.circular(12))),
+                    const BorderRadius.vertical(bottom: Radius.circular(10))),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 30,
-                  height: 30,
-                  margin: const EdgeInsets.only(right: 8),
+                  width: 26,
+                  height: 26,
+                  margin: const EdgeInsets.only(right: 6),
                   decoration: BoxDecoration(
                       color: _accent.withOpacity(0.15), shape: BoxShape.circle),
                   child: Center(
                       child: Text(_toLang.flag,
-                          style: const TextStyle(fontSize: 14))),
+                          style: const TextStyle(fontSize: 12))),
                 ),
                 Expanded(
                   child: Column(
@@ -671,25 +496,24 @@ class _HomeScreenState extends State<HomeScreen> {
                       Text(msg.translatedLang,
                           style: TextStyle(
                               color: _accent,
-                              fontSize: 12,
+                              fontSize: 11,
                               fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
                       Text(msg.translatedText,
                           style: TextStyle(
-                              color: _textPrimary,
-                              fontSize: 17,
+                              color: _txt1,
+                              fontSize: 16,
                               fontWeight: FontWeight.w500)),
                     ],
                   ),
                 ),
-                Column(
-                  children: [
-                    _actionIcon(
-                        Icons.volume_up, _accent, () => _replayMessage(msg)),
-                    _actionIcon(Icons.copy, _textSecondary,
-                        () => _copyText(msg.translatedText)),
-                  ],
-                ),
+                GestureDetector(
+                    onTap: () => _replayMessage(msg),
+                    child: Icon(Icons.volume_up, color: _accent, size: 20)),
+                const SizedBox(width: 4),
+                GestureDetector(
+                    onTap: () => _copyText(msg.translatedText),
+                    child: Icon(Icons.copy, color: _txt2, size: 18)),
               ],
             ),
           ),
@@ -698,13 +522,125 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _actionIcon(IconData icon, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Icon(icon, color: color, size: 20),
+  Widget _bottomBar() {
+    return SafeArea(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+            color: _card, border: Border(top: BorderSide(color: _brd))),
+        child: Row(
+          children: [
+            if (!_isVoiceMode)
+              Expanded(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                      color: _card2,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _brd)),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _textController,
+                          style: TextStyle(color: _txt1, fontSize: 13),
+                          decoration: InputDecoration(
+                              border: InputBorder.none,
+                              hintText: 'Type...',
+                              hintStyle: TextStyle(color: _txt2)),
+                          onSubmitted: (_) => _translateText(),
+                        ),
+                      ),
+                      GestureDetector(
+                          onTap: _translateText,
+                          child: const Icon(Icons.send,
+                              color: Color(0xFF1ABC9C), size: 18)),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                  child: Text('${_messages.length} translations',
+                      style: TextStyle(color: _txt2, fontSize: 11))),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _onMicTap,
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: _isListening ? Colors.redAccent : _accent,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                        color: (_isListening ? Colors.redAccent : _accent)
+                            .withOpacity(0.3),
+                        blurRadius: 10)
+                  ],
+                ),
+                child: Icon(_isListening ? Icons.stop : Icons.mic,
+                    color: Colors.white, size: 20),
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _textOnlyMode() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _modeBtn(Icons.mic, 'Voice', true),
+              const SizedBox(width: 8),
+              _modeBtn(Icons.text_fields, 'Text', false),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+                color: _card,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _brd)),
+            child: TextField(
+              controller: _textController,
+              style: TextStyle(color: _txt1, fontSize: 15),
+              decoration: InputDecoration(
+                  border: InputBorder.none,
+                  hintText: 'Enter text to translate...',
+                  hintStyle: TextStyle(color: _txt2)),
+              onSubmitted: (_) => _translateText(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        GestureDetector(
+          onTap: _translateText,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+            decoration: const BoxDecoration(
+                color: Color(0xFF1ABC9C),
+                borderRadius: BorderRadius.circular(20)),
+            child: const Text('Translate',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ],
     );
   }
 
@@ -713,10 +649,10 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (ctx, setSheet) => Container(
+          builder: (ctx, set) => Container(
             padding: const EdgeInsets.all(20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -724,37 +660,41 @@ class _HomeScreenState extends State<HomeScreen> {
                 Container(
                     width: 40,
                     height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
+                    margin: const EdgeInsets.only(bottom: 14),
                     decoration: BoxDecoration(
-                        color: Colors.grey.shade400,
+                        color: Colors.grey.shade500,
                         borderRadius: BorderRadius.circular(2))),
-                const Text('Settings',
-                    style:
-                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                Text('Settings',
+                    style: TextStyle(
+                        color: _txt1,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 SwitchListTile(
-                  title: const Text('Dark Mode'),
+                  title: Text('Dark Mode', style: TextStyle(color: _txt1)),
                   value: _isDarkMode,
-                  onChanged: (val) {
-                    setState(() => _isDarkMode = val);
-                    setSheet(() {});
+                  onChanged: (v) {
+                    setState(() => _isDarkMode = v);
+                    set(() {});
                   },
-                  secondary:
-                      Icon(_isDarkMode ? Icons.dark_mode : Icons.light_mode),
+                  secondary: Icon(
+                      _isDarkMode ? Icons.dark_mode : Icons.light_mode,
+                      color: _accent),
                 ),
                 SwitchListTile(
-                  title: const Text('Voice Mode'),
-                  subtitle: const Text('Switch between voice and text input'),
+                  title: Text('Voice Mode', style: TextStyle(color: _txt1)),
+                  subtitle: Text('Switch voice / text input',
+                      style: TextStyle(color: _txt2, fontSize: 12)),
                   value: _isVoiceMode,
-                  onChanged: (val) {
-                    setState(() => _isVoiceMode = val);
-                    setSheet(() {});
+                  onChanged: (v) {
+                    setState(() => _isVoiceMode = v);
+                    set(() {});
                   },
-                  secondary: const Icon(Icons.mic),
+                  secondary: const Icon(Icons.mic, color: Color(0xFF1ABC9C)),
                 ),
-                const SizedBox(height: 10),
-                Text('Kalam v1.0 | Made with love',
-                    style: TextStyle(color: _textSecondary, fontSize: 12)),
+                const SizedBox(height: 8),
+                Text('Kalam v1.0',
+                    style: TextStyle(color: _txt2, fontSize: 11)),
               ],
             ),
           ),
