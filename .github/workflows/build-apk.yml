@@ -7,15 +7,26 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/cirruslabs/flutter:3.22.0-stable
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create android platform
-        run: |
-          flutter create --platforms=android --project-name kalam .
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
 
-      - name: Fix AndroidManifest
-        run: |
-          cat > android/app/src/main/AndroidManifest
+      - name: Create android platform
+        run: flutter create --platforms=android --project-name kalam .
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalam-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
