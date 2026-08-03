@@ -96,7 +96,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     _scrollToBottom();
 
-    // Auto replay 3 times
     for (int i = 0; i < 3; i++) {
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
@@ -148,13 +147,14 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final speech = context.watch<SpeechService>();
     final translation = context.watch<TranslationService>();
+    bool isListening = _isListening;
 
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(),
+            _buildHeader(translation),
             _buildLanguageSelector(),
             if (_messages.isEmpty && !_isListening && !_isVoiceMode)
               Expanded(child: _buildTextInputArea())
@@ -176,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(TranslationService translation) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -310,8 +310,7 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          _langButton(
-              _fromLang, (lang) => setState(() => _fromLang = lang), false),
+          _langButton(_fromLang, (lang) => setState(() => _fromLang = lang)),
           GestureDetector(
             onTap: _swapLanguages,
             child: Container(
@@ -323,14 +322,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Icon(Icons.swap_horiz, color: Colors.white, size: 18)),
             ),
           ),
-          _langButton(_toLang, (lang) => setState(() => _toLang = lang), true),
+          _langButton(_toLang, (lang) => setState(() => _toLang = lang)),
         ],
       ),
     );
   }
 
-  Widget _langButton(
-      AppLanguage lang, Function(AppLanguage) onSelect, bool isTo) {
+  Widget _langButton(AppLanguage lang, Function(AppLanguage) onSelect) {
     return Expanded(
       child: GestureDetector(
         onTap: () => LanguageBottomSheet.show(context, lang, onSelect),
@@ -603,7 +601,6 @@ class _HomeScreenState extends State<HomeScreen> {
       margin: const EdgeInsets.only(bottom: 10),
       child: Column(
         children: [
-          // Source
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -648,7 +645,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          // Translation
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -757,7 +753,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   secondary: const Icon(Icons.mic),
                 ),
                 const SizedBox(height: 10),
-                Text('Kalam v1.0 | Made with ❤️',
+                Text('Kalam v1.0 | Made with love',
                     style: TextStyle(color: _textSecondary, fontSize: 12)),
               ],
             ),
