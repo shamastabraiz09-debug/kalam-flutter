@@ -32,13 +32,10 @@ class TtsService extends ChangeNotifier {
 
   Future<void> speak(String text, String languageCode) async {
     if (text.trim().isEmpty) return;
-
     await _flutterTts.stop();
 
-    // Find matching voice for the language
     var voices = await _flutterTts.getVoices;
     String? selectedVoice;
-
     for (var voice in voices) {
       if (voice['locale'].toString().startsWith(languageCode)) {
         selectedVoice = voice['locale'].toString();
