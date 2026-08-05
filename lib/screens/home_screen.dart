@@ -10,7 +10,6 @@ import '../widgets/language_bottom_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -22,7 +21,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isListening = false;
   bool _isDarkMode = true;
   bool _isVoiceMode = true;
-  bool _permissionGranted = false;
+  String _permissionStatus = 'Checking...';
+  String _speechStatus = 'Initializing...';
+  String _lastError = '';
 
   AppLanguage _fromLang = languages.firstWhere((l) => l.code == 'en');
   AppLanguage _toLang = languages.firstWhere((l) => l.code == 'ar');
@@ -30,16 +31,21 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _requestPermission();
-    final tts = Provider.of<TtsService>(context, listen: false);
-    final speech = Provider.of<SpeechService>(context, listen: false);
-    tts.initialize();
-    speech.initialize();
+    _initServices();
   }
 
-  Future<void> _requestPermission() async {
+  Future<void> _initServices() async {
     final status = await Permission.microphone.request();
-    setState(() => _permissionGranted = status.isGranted);
+    setState(() {
+      _permissionStatus = status.isGranted ? 'Granted' : 'Denied';
+    });
+    final tts = Provider.of<TtsService>(context, listen: false);
+    await tts.init();
+    final speech = Provider.of<SpeechService>(context, listen: false);
+    await speech.init();
+    setState(() {
+      _speechStatus = speech.isAvailable ? 'Available' : 'Not Available';
+    });
   }
 
   @override
@@ -62,20 +68,37 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _onMicTap() async {
-    if (!_permissionGranted) {
-      await _requestPermission();
-      return;
+    final permStatus = await Permission.microphone.status;
+    if (!permStatus.isGranted) {
+      final newStatus = await Permission.microphone.request();
+      if (!newStatus.isGranted) {
+        setState(() => _lastError = 'Mic permission denied');
+        return;
+      }
+      setState(() => _permissionStatus = 'Granted');
     }
     final speech = Provider.of<SpeechService>(context, listen: false);
     if (_isListening) {
+      final capturedText = speech.lastWords;
       setState(() => _isListening = false);
       speech.stopListening();
-      await Future.delayed(const Duration(milliseconds: 300));
-      final text = speech.currentText;
-      if (text.trim().isNotEmpty) await _translateAndAdd(text);
+      if (capturedText.trim().isNotEmpty) {
+        await _translateAndAdd(capturedText);
+      }
     } else {
       setState(() => _isListening = true);
-      speech.startListening('A');
+      if (!speech.isAvailable) await speech.init();
+      if (!speech.isAvailable) {
+        setState(() {
+          _lastError = 'Speech not available';
+          _isListening = false;
+        });
+        return;
+      }
+      speech.startListening(
+        localeId: _fromLang.ttsCode,
+        onResult: (_) {},
+      );
     }
   }
 
@@ -87,19 +110,27 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _translateAndAdd(String text) async {
+    setState(() => _lastError = '');
     final translation = Provider.of<TranslationService>(context, listen: false);
     final tts = Provider.of<TtsService>(context, listen: false);
-    final translated =
-        await translation.translate(text, _fromLang.code, _toLang.code);
+    final translated = await translation.translate(
+      text: text,
+      from: _fromLang.code,
+      to: _toLang.code,
+    );
     if (!mounted) return;
+    if (translated == null || translated.isEmpty) {
+      setState(() => _lastError = 'Translation failed. Try again.');
+      return;
+    }
     setState(() {
       _messages.add(ChatMessage(
-        originalText: text,
+        text: text,
         translatedText: translated,
-        originalLang: _fromLang.nativeName,
-        translatedLang: _toLang.nativeName,
+        fromLang: _fromLang.code,
+        toLang: _toLang.code,
         isPersonA: true,
-        timestamp: DateTime.now(),
+        time: DateTime.now(),
       ));
     });
     _scrollToBottom();
@@ -124,8 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _replayMessage(ChatMessage msg) {
     final tts = Provider.of<TtsService>(context, listen: false);
-    tts.speak(msg.translatedText,
-        msg.isPersonA ? _toLang.ttsCode : _fromLang.ttsCode);
+    tts.speak(msg.translatedText, _toLang.ttsCode);
   }
 
   void _copyText(String text) {
@@ -159,6 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             _header(translation),
             _langSelector(),
+            _debugBar(),
+            if (_lastError.isNotEmpty) _errorBanner(),
             if (_messages.isEmpty && !_isListening && !_isVoiceMode)
               Expanded(child: _textOnlyMode())
             else if (_messages.isEmpty && !_isListening)
@@ -174,6 +206,53 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _debugBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+      child: Row(
+        children: [
+          Icon(Icons.circle,
+              size: 8,
+              color:
+                  _permissionStatus == 'Granted' ? Colors.green : Colors.red),
+          const SizedBox(width: 3),
+          Text('Mic: $_permissionStatus',
+              style: TextStyle(color: _txt2, fontSize: 9)),
+          const SizedBox(width: 12),
+          Icon(Icons.circle,
+              size: 8,
+              color:
+                  _speechStatus == 'Available' ? Colors.green : Colors.orange),
+          const SizedBox(width: 3),
+          Text('Speech: $_speechStatus',
+              style: TextStyle(color: _txt2, fontSize: 9)),
+        ],
+      ),
+    );
+  }
+
+  Widget _errorBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: Colors.redAccent.withOpacity(0.1),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, color: Colors.redAccent, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(_lastError,
+                  style:
+                      const TextStyle(color: Colors.redAccent, fontSize: 11))),
+          GestureDetector(
+              onTap: () => setState(() => _lastError = ''),
+              child:
+                  const Icon(Icons.close, color: Colors.redAccent, size: 16)),
+        ],
+      ),
+    );
+  }
+
   Widget _header(TranslationService t) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -185,21 +264,25 @@ class _HomeScreenState extends State<HomeScreen> {
             decoration: const BoxDecoration(
                 color: Color(0xFF1ABC9C), shape: BoxShape.circle),
             child: const Center(
-                child: Text('ک',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold))),
+              child: Text('\u06A9',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold)),
+            ),
           ),
           const SizedBox(width: 8),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Kalam كلام',
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                Text('Voice Translator', style: TextStyle(fontSize: 10)),
+                Text('Kalam \u06A9\u0644\u0627\u0645',
+                    style: TextStyle(
+                        color: _txt1,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
+                Text('Voice Translator',
+                    style: TextStyle(color: _txt2, fontSize: 10)),
               ],
             ),
           ),
@@ -218,24 +301,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         color: Colors.green, shape: BoxShape.circle)),
                 const SizedBox(width: 3),
                 Text(
-                    t.isTranslating
-                        ? 'Translating...'
-                        : _isListening
-                            ? 'Listening...'
-                            : 'Ready',
-                    style: const TextStyle(
-                        color: Colors.green,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600)),
+                  t.isTranslating
+                      ? 'Translating'
+                      : _isListening
+                          ? 'Listening'
+                          : 'Ready',
+                  style: const TextStyle(
+                      color: Colors.green,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600),
+                ),
               ],
             ),
           ),
           const SizedBox(width: 8),
           GestureDetector(
-            onTap: _showSettings,
-            child: const Icon(Icons.settings_outlined,
-                color: Colors.white54, size: 20),
-          ),
+              onTap: _showSettings,
+              child: Icon(Icons.settings_outlined, color: _txt2, size: 20)),
         ],
       ),
     );
@@ -270,7 +352,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _langCard(AppLanguage lang, Function(AppLanguage) onSel) {
     return GestureDetector(
-      onTap: () => LanguageBottomSheet.show(context, lang, onSel),
+      onTap: () {
+        showModalBottomSheet(
+          context: context,
+          backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          builder: (ctx) =>
+              LanguageBottomSheet(selectedLang: lang, onSelected: onSel),
+        );
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
@@ -301,19 +391,17 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _modeBtn(Icons.mic, 'Voice', true),
-              const SizedBox(width: 8),
-              _modeBtn(Icons.text_fields, 'Text', false),
-            ],
-          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            _modeBtn(Icons.mic, 'Voice', true),
+            const SizedBox(width: 8),
+            _modeBtn(Icons.text_fields, 'Text', false),
+          ]),
         ),
         const SizedBox(height: 30),
         GestureDetector(
           onTap: _onMicTap,
-          child: Container(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
             width: 100,
             height: 100,
             decoration: BoxDecoration(
@@ -345,22 +433,18 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: active ? _accent : _card,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: active ? _accent : _brd),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: active ? Colors.white : _txt2),
-            const SizedBox(width: 4),
-            Text(label,
-                style: TextStyle(
-                    color: active ? Colors.white : _txt2,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600)),
-          ],
-        ),
+            color: active ? _accent : _card,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: active ? _accent : _brd)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 13, color: active ? Colors.white : _txt2),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  color: active ? Colors.white : _txt2,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600)),
+        ]),
       ),
     );
   }
@@ -370,25 +454,29 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       child: Row(
         children: [
-          if (_isListening && speech.currentText.isNotEmpty)
+          if (_isListening && speech.lastWords.isNotEmpty)
             Expanded(
-                child: Text(speech.currentText,
+                child: Text(speech.lastWords,
                     style: TextStyle(
                         color: _txt1,
                         fontSize: 13,
                         fontStyle: FontStyle.italic)))
+          else if (_isListening)
+            Text('Listening...',
+                style: TextStyle(color: Colors.white70, fontSize: 12))
           else
             const Spacer(),
           if (_isListening)
             const SizedBox(
-                width: 16,
-                height: 16,
+                width: 14,
+                height: 14,
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: Color(0xFF1ABC9C))),
           const SizedBox(width: 8),
           GestureDetector(
             onTap: _onMicTap,
-            child: Container(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
               width: 44,
               height: 44,
               decoration: BoxDecoration(
@@ -422,17 +510,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _msgCard(ChatMessage msg, int i) {
     final time =
-        '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}';
+        '${msg.time.hour.toString().padLeft(2, '0')}:${msg.time.minute.toString().padLeft(2, '0')}';
+    final fromName = AppLanguage.fromCode(msg.fromLang).nativeName;
+    final toName = AppLanguage.fromCode(msg.toLang).nativeName;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _brd),
-      ),
+          color: _card,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _brd)),
       child: Column(
         children: [
-          // Source text
           Container(
             padding: const EdgeInsets.all(10),
             child: Row(
@@ -444,20 +532,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Text(msg.originalLang,
-                              style: TextStyle(
-                                  color: _accent,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600)),
-                          const Spacer(),
-                          Text(time,
-                              style: TextStyle(color: _txt2, fontSize: 10)),
-                        ],
-                      ),
+                      Row(children: [
+                        Text(fromName,
+                            style: TextStyle(
+                                color: _accent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600)),
+                        const Spacer(),
+                        Text(time,
+                            style: TextStyle(color: _txt2, fontSize: 10)),
+                      ]),
                       const SizedBox(height: 3),
-                      Text(msg.originalText,
+                      Text(msg.text,
                           style: TextStyle(color: _txt1, fontSize: 14)),
                     ],
                   ),
@@ -469,13 +555,13 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          // Translated text
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-                color: _card2,
-                borderRadius:
-                    const BorderRadius.vertical(bottom: Radius.circular(10))),
+              color: _card2,
+              borderRadius:
+                  const BorderRadius.vertical(bottom: Radius.circular(10)),
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -493,7 +579,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(msg.translatedLang,
+                      Text(toName,
                           style: TextStyle(
                               color: _accent,
                               fontSize: 11,
@@ -539,25 +625,22 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: _card2,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: _brd)),
-                  child: Row(
-                    children: [
-                      Expanded(
+                  child: Row(children: [
+                    Expanded(
                         child: TextField(
-                          controller: _textController,
-                          style: TextStyle(color: _txt1, fontSize: 13),
-                          decoration: InputDecoration(
-                              border: InputBorder.none,
-                              hintText: 'Type...',
-                              hintStyle: TextStyle(color: _txt2)),
-                          onSubmitted: (_) => _translateText(),
-                        ),
-                      ),
-                      GestureDetector(
-                          onTap: _translateText,
-                          child: const Icon(Icons.send,
-                              color: Color(0xFF1ABC9C), size: 18)),
-                    ],
-                  ),
+                      controller: _textController,
+                      style: TextStyle(color: _txt1, fontSize: 13),
+                      decoration: InputDecoration(
+                          border: InputBorder.none,
+                          hintText: 'Type...',
+                          hintStyle: TextStyle(color: _txt2)),
+                      onSubmitted: (_) => _translateText(),
+                    )),
+                    GestureDetector(
+                        onTap: _translateText,
+                        child: const Icon(Icons.send,
+                            color: Color(0xFF1ABC9C), size: 18)),
+                  ]),
                 ),
               )
             else
@@ -596,14 +679,11 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _modeBtn(Icons.mic, 'Voice', true),
-              const SizedBox(width: 8),
-              _modeBtn(Icons.text_fields, 'Text', false),
-            ],
-          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            _modeBtn(Icons.mic, 'Voice', true),
+            const SizedBox(width: 8),
+            _modeBtn(Icons.text_fields, 'Text', false),
+          ]),
         ),
         const SizedBox(height: 20),
         Padding(
@@ -630,9 +710,10 @@ class _HomeScreenState extends State<HomeScreen> {
           onTap: _translateText,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-            decoration: const BoxDecoration(
-                color: Color(0xFF1ABC9C),
-                borderRadius: BorderRadius.circular(20)),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1ABC9C),
+              borderRadius: BorderRadius.circular(20),
+            ),
             child: const Text('Translate',
                 style: TextStyle(
                     color: Colors.white,
@@ -691,6 +772,43 @@ class _HomeScreenState extends State<HomeScreen> {
                     set(() {});
                   },
                   secondary: const Icon(Icons.mic, color: Color(0xFF1ABC9C)),
+                ),
+                const Divider(),
+                ListTile(
+                  title: Text('Mic Permission',
+                      style: TextStyle(color: _txt1, fontSize: 13)),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.circle,
+                        size: 8,
+                        color: _permissionStatus == 'Granted'
+                            ? Colors.green
+                            : Colors.red),
+                    const SizedBox(width: 4),
+                    Text(_permissionStatus,
+                        style: TextStyle(
+                            color: _permissionStatus == 'Granted'
+                                ? Colors.green
+                                : Colors.red,
+                            fontSize: 12)),
+                  ]),
+                ),
+                ListTile(
+                  title: Text('Speech Engine',
+                      style: TextStyle(color: _txt1, fontSize: 13)),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.circle,
+                        size: 8,
+                        color: _speechStatus == 'Available'
+                            ? Colors.green
+                            : Colors.orange),
+                    const SizedBox(width: 4),
+                    Text(_speechStatus,
+                        style: TextStyle(
+                            color: _speechStatus == 'Available'
+                                ? Colors.green
+                                : Colors.orange,
+                            fontSize: 12)),
+                  ]),
                 ),
                 const SizedBox(height: 8),
                 Text('Kalam v1.0',
